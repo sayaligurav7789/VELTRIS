@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product Verification</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#eef1f4; --card:#fff; --ink:#14202b; --muted:#5b6b7a; --line:#cfd8e0; --ok:#0f766e; --bad:#b42318; --warn:#b45309; --accent:#1d4ed8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:400 16px/1.5 "IBM Plex Sans", system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px 24px; background:var(--ink); color:#fff; }
+  header h1 { margin:0; font-size:20px; font-weight:600; }
+  #status { font-size:14px; opacity:.85; }
+  main { max-width:880px; margin:24px auto; padding:0 16px; display:grid; gap:20px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:20px; }
+  h2 { margin:0 0 12px; font-size:18px; }
+  label { display:block; font-size:14px; color:var(--muted); margin:10px 0 4px; }
+  input { width:100%; padding:10px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; }
+  @media (max-width:600px) { .grid { grid-template-columns:1fr; } }
+  .mono { font-family:"IBM Plex Mono", monospace; font-size:13px; word-break:break-all; color:var(--muted); }
+  .row { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
+  button { padding:10px 18px; border:0; border-radius:6px; background:var(--accent); color:#fff; font:600 15px "IBM Plex Sans", sans-serif; cursor:pointer; }
+  button.alt { background:#fff; color:var(--ink); border:1px solid var(--ink); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #verdict { margin-top:16px; padding:16px; border-radius:6px; border:2px solid var(--line); display:none; }
+  #verdict strong { display:block; font-size:22px; }
+  #verdict.ok { border-color:var(--ok); color:var(--ok); }
+  #verdict.bad { border-color:var(--bad); color:var(--bad); }
+  #verdict.warn { border-color:var(--warn); color:var(--warn); }
+  #verdict span { color:var(--ink); font-size:14px; }
+  #log { margin-top:12px; font-size:14px; min-height:20px; }
+  .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Product Verification</h1>
+  <div><span id="status">Wallet not connected</span> <button id="connect">Connect wallet</button></div>
+</header>
+
+<main>
+  <section>
+    <h2>Product details</h2>
+    <p class="mono" style="margin:0 0 4px;color:var(--ink);font-family:inherit;font-size:14px">Enter exactly what is printed on the product. Any change, even a space inside a word, produces a different hash.</p>
+    <div class="grid">
+      <div><label for="pid">Product ID</label><input id="pid" placeholder="e.g. SN-2026-000123"></div>
+      <div><label for="pname">Product name</label><input id="pname" placeholder="e.g. Aurora Wireless Earbuds"></div>
+      <div><label for="pbatch">Batch number</label><input id="pbatch" placeholder="e.g. B-45"></div>
+      <div><label for="pdate">Manufacture date</label><input id="pdate" type="date"></div>
+    </div>
+    <label>Hash of these details</label>
+    <div class="mono" id="hash">Fill in the fields to see the hash</div>
+    <div class="row">
+      <button id="verify" disabled>Verify product</button>
+      <button id="register" class="alt" disabled>Register product (manufacturers)</button>
+    </div>
+    <div id="verdict" role="status"></div>
+    <div id="log" role="status"></div>
+  </section>
+
+  <section>
+    <h2>Admin tools</h2>
+    <label for="maddr">Manufacturer wallet address</label>
+    <input id="maddr" placeholder="0x...">
+    <div class="row">
+      <button id="addM" class="alt" disabled>Authorize manufacturer</button>
+      <button id="rmM" class="alt" disabled>Remove manufacturer</button>
+      <button id="revoke" class="alt" disabled>Revoke product (uses Product ID above)</button>
+    </div>
+    <p class="mono" style="font-family:inherit">Authorizing and removing manufacturers is for the contract owner. Revoking is for the manufacturer who registered the product, or the owner.</p>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+<script src="contract-config.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let contract, account;
+
+const fields = () => ({ id: $("pid").value.trim(), name: $("pname").value.trim(), batch: $("pbatch").value.trim(), date: $("pdate").value });
+const hashOf = (f) => ethers.keccak256(ethers.toUtf8Bytes([f.id, f.name, f.batch, f.date].join("|")));
+const complete = (f) => f.id && f.name && f.batch && f.date;
+const errText = (e) => e.shortMessage || e.reason || e.message || String(e);
+
+function log(msg, isErr) { $("log").className = isErr ? "err" : ""; $("log").textContent = msg; }
+function verdict(cls, title, detail) {
+  const v = $("verdict");
+  v.className = cls; v.style.display = "block";
+  v.innerHTML = "<strong></strong><span></span>";
+  v.querySelector("strong").textContent = title;
+  v.querySelector("span").textContent = detail;
+}
+
+["pid", "pname", "pbatch", "pdate"].forEach((id) => $(id).addEventListener("input", () => {
+  const f = fields();
+  $("hash").textContent = complete(f) ? hashOf(f) : "Fill in the fields to see the hash";
+}));
+
+async function connect() {
+  if (!window.CONTRACT) return log("No contract found. Run the deploy script first (see the steps in the chat).", true);
+  if (!window.ethereum) return log("MetaMask was not found. Install the MetaMask browser extension and reload.", true);
+  try {
+    const hex = "0x" + window.CONTRACT.chainId.toString(16);
+    try {
+      await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
+    } catch (e) {
+      if (e.code === 4902 && window.CONTRACT.chainId === 31337) {
+        await ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: hex, chainName: "Hardhat Local", rpcUrls: ["http://127.0.0.1:8545"], nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 } }] });
+      } else throw e;
+    }
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    account = await signer.getAddress();
+    contract = new ethers.Contract(window.CONTRACT.address, window.CONTRACT.abi, signer);
+
+    const [owner, isM] = await Promise.all([contract.owner(), contract.isManufacturer(account)]);
+    const isOwner = owner.toLowerCase() === account.toLowerCase();
+    const role = isOwner ? "owner" : isM ? "manufacturer" : "visitor";
+    $("status").textContent = account.slice(0, 6) + "..." + account.slice(-4) + " (" + role + ")";
+    $("connect").textContent = "Connected";
+    $("verify").disabled = false;
+    $("register").disabled = !(isM || isOwner);
+    $("addM").disabled = $("rmM").disabled = !isOwner;
+    $("revoke").disabled = !(isM || isOwner);
+    log("");
+  } catch (e) { log(errText(e), true); }
+}
+
+async function run(label, fn) {
+  try { log(label + "..."); await fn(); } catch (e) { log(errText(e), true); }
+}
+
+$("connect").onclick = connect;
+
+$("verify").onclick = () => run("Checking the blockchain", async () => {
+  const f = fields();
+  if (!complete(f)) throw new Error("Fill in all four product fields.");
+  const r = await contract.verifyProduct(f.id, hashOf(f));
+  const [authentic, registered, revoked, maker, at] = r;
+  const when = at > 0n ? new Date(Number(at) * 1000).toLocaleString() : "";
+  const detail = "Manufacturer " + maker + ", registered " + when;
+  if (authentic) verdict("ok", "Authentic", detail);
+  else if (!registered) verdict("bad", "Not registered", "No product with this ID exists on the blockchain. Treat it as suspect.");
+  else if (revoked) verdict("warn", "Revoked", "The manufacturer or owner marked this product as recalled or counterfeit. " + detail);
+  else verdict("bad", "Details do not match", "This ID exists but the details differ from what the manufacturer registered. " + detail);
+  log("");
+});
+
+$("register").onclick = () => run("Waiting for wallet confirmation", async () => {
+  const f = fields();
+  if (!complete(f)) throw new Error("Fill in all four product fields.");
+  const tx = await contract.registerProduct(f.id, hashOf(f));
+  log("Transaction sent: " + tx.hash + ". Waiting for confirmation...");
+  await tx.wait();
+  log("Registered. Transaction " + tx.hash);
+});
+
+$("addM").onclick = () => run("Authorizing manufacturer", async () => {
+  const tx = await contract.setManufacturer($("maddr").value.trim(), true); await tx.wait(); log("Manufacturer authorized.");
+});
+$("rmM").onclick = () => run("Removing manufacturer", async () => {
+  const tx = await contract.setManufacturer($("maddr").value.trim(), false); await tx.wait(); log("Manufacturer removed.");
+});
+$("revoke").onclick = () => run("Revoking product", async () => {
+  const id = $("pid").value.trim(); if (!id) throw new Error("Enter a Product ID.");
+  const tx = await contract.revokeProduct(id); await tx.wait(); log("Product " + id + " revoked.");
+});
+
+if (window.ethereum) {
+  ethereum.on("accountsChanged", () => location.reload());
+  ethereum.on("chainChanged", () => location.reload());
+}
+</script>
+</body>
+</html>
