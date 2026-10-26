@@ -1,4 +1,4 @@
-const { ethers, artifacts } = require("hardhat");
+const { ethers, artifacts, network, run } = require("hardhat");
 const fs = require("fs");
 
 async function main() {
@@ -14,6 +14,22 @@ async function main() {
   );
   console.log("Deployed to:", address, "(chain", chainId.toString() + ")");
   console.log("Frontend config written to frontend/contract-config.js");
+
+  // Auto-verify on Etherscan when deploying to a public network.
+  if (network.name === "sepolia" && process.env.ETHERSCAN_API_KEY) {
+    console.log("Waiting for 5 confirmations before verifying...");
+    await contract.deploymentTransaction().wait(5);
+    try {
+      await run("verify:verify", { address, constructorArguments: [] });
+      console.log("Verified: https://sepolia.etherscan.io/address/" + address + "#code");
+    } catch (e) {
+      if (/already verified/i.test(e.message)) {
+        console.log("Already verified.");
+      } else {
+        console.error("Verification failed (you can retry with npm run verify:sepolia):", e.message);
+      }
+    }
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

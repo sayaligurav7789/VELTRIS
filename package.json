@@ -8,6 +8,7 @@
     "test": "hardhat test",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "verify:sepolia": "hardhat verify --network sepolia",
     "serve": "npx serve frontend -l 3000"
   },
   "devDependencies": {
